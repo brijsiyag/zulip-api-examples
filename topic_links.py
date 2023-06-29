@@ -1,6 +1,6 @@
 import re
 import zulip
-from urllib.parse import urlparse
+from urllib import parse
 
 DEVELOPMENT = False
 
@@ -9,28 +9,50 @@ global host
 
 if DEVELOPMENT:
     print("In development env...")
-    stream_list = ["devel"]
     client = zulip.Client(config_file="./zuliprc")
     BOT_REGEX = r"(.*)-bot@(zulipdev.com|zulip.com)$"
 else:
     BOT_REGEX = r"(.*)-bot@(chat.zulip.org|zulip.com)$"
     client = zulip.Client(config_file="/home/ubuntu/zuliprc")
-    stream_list = [
-        "settings system",
-        "api design",
-        "backend",
-        "chat.zulip.org",
-        "design",
-        "frontend",
-        "feedback",
-        "issues",
-        "general",
-    ]
+
+stream_list = []
 
 
-parsed_url = urlparse(client.base_url)
+def update_streams_list():
+    stream_list.clear()
+    response = client.get_subscriptions()
+    streams = response["subscriptions"]
+    for stream in streams:
+        stream_list.append(stream["name"])
+    print(stream_list)
+
+
+hash_replacements = {
+    ".": ".2E",
+    "%": ".",
+    "(": ".28",
+    ")": ".29",
+}
+
+
+def encode_hash_component(id):
+    encoded_id = parse.quote(id, safe="")
+    for k, v in hash_replacements.items():
+        encoded_id = encoded_id.replace(k, v)
+    return encoded_id
+
+
+parsed_url = parse.urlparse(client.base_url)
 host = parsed_url.scheme + "://" + parsed_url.netloc
 print(host)
+
+
+def get_near_link(msg_id, stream_id, stream_name, topic):
+    stream_name = stream_name.replace(" ", "-")
+    msg_id = encode_hash_component(str(msg_id))
+    stream_slug = encode_hash_component(f"{stream_id}-{stream_name}")
+    topic_slug = encode_hash_component(topic)
+    return host + f"/#narrow/stream/{stream_slug}/topic/{topic_slug}/near/{msg_id}"
 
 
 def send(content, topic, stream):
@@ -57,18 +79,21 @@ def handle_message(msg):
     content = msg["content"]
 
     stream = msg["display_recipient"]
+    stream_id = msg["stream_id"]
     topic = msg["subject"]
 
     if stream not in stream_list:
         return
+
     from_topic_link = f"#**{stream}>{topic}**"
     user_id = msg["sender_id"]
     user_name = msg["sender_full_name"]
+
     sender = f"@_**{user_name}|{user_id}**"
-    stream_id = msg["stream_id"]
-    near_link = (
-        host + f"/#narrow/stream/{stream_id}-{stream}/topic/{topic}/near/{msg['id']}"
-    )
+
+    msg_id = msg["id"]
+
+    near_link = get_near_link(msg_id, stream_id, stream, topic)
     for tagged_topic_link, tagged_stream, tagged_topic in re.findall(
         TOPIC_LINK_RE, content
     ):
@@ -80,34 +105,38 @@ def handle_message(msg):
         send(msg, tagged_topic, tagged_stream)
 
 
+def handle_reaction(reaction):
+    emoji_name = reaction["emoji_name"]
+    message_id = reaction["message_id"]
+    op = reaction["op"]
+    user_email = reaction["user"]["email"]
+    message = client.get_raw_message(message_id)
+
+    if message.get("message")["sender_email"] != client.email:
+        return
+    if op != "add" or emoji_name != "-1":
+        return
+
+    response = client.delete_message(message_id)
+    if response["result"] == "error":
+        print(f"Unable to delete the message {message_id} by attempted by {user_email}")
+    else:
+        print(f"{user_email} deleted message {message_id} by reacting.")
+
+
 def watch_messages():
     def handle_event(event):
-        if "message" not in event:
-            # ignore heartbeat events
-            return
-        handle_message(event["message"])
+        event_type = event["type"]
+        if event_type == "message":
+            handle_message(event["message"])
+        elif event_type == "reaction":
+            handle_reaction(event)
+        elif event_type == "subscription":
+            update_streams_list()
 
+    update_streams_list()
     # https://zulip.com/api/real-time-events
-    client.call_on_each_event(
-        handle_event, event_types=["message"], all_public_streams=True
-    )
-
-
-def get_recent_messages():
-    # Use this as alternative to watch_messages if you want to create links for some recent
-    # messages.
-    narrow = [dict(operator="streams", operand="public")]
-    request = dict(
-        anchor="newest",
-        apply_markdown=False,
-        narrow=narrow,
-        num_after=0,
-        num_before=20,
-    )
-    result = client.get_messages(request)
-
-    for message in result["messages"]:
-        handle_message(message)
+    client.call_on_each_event(handle_event)
 
 
 watch_messages()
