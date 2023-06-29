@@ -6,9 +6,20 @@ DEVELOPMENT = False
 
 global client
 global host
+import logging
+import datetime
+
+logging.basicConfig(
+    filename=f"{datetime.datetime.now().strftime('%d-%m-%Y-%H:%M')}.log",
+    format="%(asctime)s %(message)s",
+    filemode="w",
+)
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 if DEVELOPMENT:
-    print("In development env...")
+    logger.info("In development env...")
     client = zulip.Client(config_file="./zuliprc")
     BOT_REGEX = r"(.*)-bot@(zulipdev.com|zulip.com)$"
 else:
@@ -24,7 +35,7 @@ def update_streams_list():
     streams = response["subscriptions"]
     for stream in streams:
         stream_list.append(stream["name"])
-    print(stream_list)
+    logger.info(stream_list)
 
 
 hash_replacements = {
@@ -44,7 +55,7 @@ def encode_hash_component(id):
 
 parsed_url = parse.urlparse(client.base_url)
 host = parsed_url.scheme + "://" + parsed_url.netloc
-print(host)
+logger.info(host)
 
 
 def get_near_link(msg_id, stream_id, stream_name, topic):
@@ -64,12 +75,11 @@ def send(content, topic, stream):
         "content": content,
     }
     client.send_message(request)
-    print(f"sent->{content}")
+    logger.info(f"sent->{content}")
 
 
 def handle_message(msg):
     if msg["type"] != "stream":
-        print("Ignoring DM...")
         return
     if re.match(BOT_REGEX, msg["sender_email"]):
         return
@@ -119,9 +129,11 @@ def handle_reaction(reaction):
 
     response = client.delete_message(message_id)
     if response["result"] == "error":
-        print(f"Unable to delete the message {message_id} by attempted by {user_email}")
+        logger.info(
+            f"Unable to delete the message {message_id} by attempted by {user_email}"
+        )
     else:
-        print(f"{user_email} deleted message {message_id} by reacting.")
+        logger.warning(f"{user_email} deleted message {message_id} by reacting.")
 
 
 def watch_messages():
