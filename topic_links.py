@@ -10,7 +10,7 @@ import logging
 import datetime
 
 logging.basicConfig(
-    filename=f"{datetime.datetime.now().strftime('%d-%m-%Y-%H:%M')}.log",
+    filename=f"/var/log/supervisor/{datetime.datetime.now().strftime('%d-%m-%Y-%H:%M')}.log",
     format="%(asctime)s %(message)s",
     filemode="w",
 )
